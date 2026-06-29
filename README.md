@@ -18,38 +18,6 @@ LMS-TRD is a lightweight multi-scale Transformer that reduces parameters by ~67%
 
 ---
 
-## Architecture
-
-A rainy image is decomposed into a three-level pyramid (quarter, half, and full resolution). Features at each scale are extracted by a single **shared** SST backbone, fused across scales by the eBFU, refined by the RRB, and combined with a rain-free proxy produced by the Lite-INR branch.
-
-```
-Rainy image
-    │
-    ▼
-Shallow feature extraction (3×3 conv)
-    │
-    ├──────────────────────────────► Lite-INR branch (2-level hash-grid)
-    │                                   │  rain-free RGB proxy + feature injection
-    ▼                                   │
-Three-level pyramid  {S1, S2, S3}       │
-    │     (1/4)   (1/2)   (full)        │
-    ▼                                   │
-Shared-Split Transformer (SST) ◄────────┘   one shared backbone reused at all scales
-    │   • DW-MSA   linear O(n) attention
-    │   • DS-FFN   depthwise-separable feed-forward
-    ▼
-eBFU  (gated-additive bidirectional cross-scale fusion)
-    │
-    ▼
-Rain Refinement Block (RRB)
-    │   DWConv 3×3 → dilated DWConv 5×5 (d=2) → ECA channel attention → 1×1 proj
-    ▼
-Reconstruction (conv) + shallow skip
-    │
-    ▼
-Derained image
-```
-
 ## Installation
 
 Requires Python 3.8+ and PyTorch.
@@ -206,7 +174,7 @@ LMS-TRD/
 ├── smoke_test.py
 ├── run.sh
 ├── requirements.txt
-├── RECONCILIATION.md       # how/why the default config matches the reported numbers
+├── RECONCILIATION.md
 └── README.md
 ```
 
@@ -214,7 +182,7 @@ LMS-TRD/
 
 ## Results
 
-Average PSNR / SSIM across the five benchmarks (from the paper):
+Average PSNR / SSIM across the five benchmarks :
 
 | Method               | Avg PSNR (dB) | Avg SSIM  | Params (M) | FLOPs (G) |
 | -------------------- | ------------- | --------- | ---------- | --------- |
