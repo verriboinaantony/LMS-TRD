@@ -50,34 +50,6 @@ Reconstruction (conv) + shallow skip
 Derained image
 ```
 
-### Components
-
-| Module           | File                                       | Description                                                                                       |
-| ---------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| **SST backbone** | `models/unet_sst.py`, `models/sst_flat.py` | Shared transformer reused across all three pyramid scales (cross-scale weight sharing).           |
-| **DW-MSA**       | `models/blocks.py`                         | Linear-complexity O(n) self-attention with ℓ2 feature normalization and low-rank Q/K projections. |
-| **DS-FFN**       | `models/blocks.py`                         | Depthwise-separable feed-forward network (3×3 depthwise spatial mixing).                          |
-| **Lite-INR**     | `models/lite_inr.py`                       | Two-level hash-grid implicit branch producing a rain-free RGB proxy (Eq. 3).                      |
-| **eBFU**         | `models/ebfu.py`                           | Gated-additive bidirectional feature fusion across adjacent scales (Eq. 4).                       |
-| **RRB**          | `models/rrb.py`                            | Residual artifact corrector: depthwise 3×3 → dilated depthwise 5×5 → ECA → 1×1.                   |
-| **Loss**         | `training/losses.py`                       | Charbonnier + edge + frequency + INR terms (Eq. 5–8).                                             |
-| **Full model**   | `models/lms_trd.py`                        | Assembles all modules; exposes ablation toggles.                                                  |
-
----
-
-## Two configurations
-
-This repo ships two backbone configurations. Both keep cross-scale weight sharing and every other mechanism; they differ only in whether the shared backbone has an internal encoder–decoder (U-Net) structure.
-
-| Config                           | Backbone                      | Measured params | Measured FLOPs (2×MAC) | Purpose                                                |
-| -------------------------------- | ----------------------------- | --------------- | ---------------------- | ------------------------------------------------------ |
-| `configs/lms_trd.yaml` (default) | encoder–decoder U-Net SST     | **8.09 M**      | **61.9 G**             | Reproduces the reported 7.87 M / 64.22 G (within ~3%). |
-| `configs/lms_trd_prose.yaml`     | flat SST (literal §3.2 prose) | ~0.25 M         | ~25 G                  | Faithful to the method exactly as written in the text. |
-
-> All complexity figures above are **measured** by the profiler in `utils/complexity.py` at 256×256 input. Run `python smoke_test.py` to reproduce them. See `RECONCILIATION.md` for the architectural rationale behind the default configuration.
-
----
-
 ## Installation
 
 Requires Python 3.8+ and PyTorch.
