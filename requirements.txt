@@ -1,0 +1,6 @@
+torch>=1.10
+numpy>=1.21
+Pillow>=8.0
+PyYAML>=5.4
+# optional: independent MAC/FLOP cross-check used by the profiler if present
+# thop>=0.1.1
