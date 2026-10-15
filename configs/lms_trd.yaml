@@ -1,53 +1,30 @@
-# LMS-TRD configuration that MATCHES THE REPORTED COMPLEXITY (7.87 M / 64.22 G).
-#
-# This uses the encoder-decoder ("U-Net") SST backbone, which restores the
-# per-scale encoder-decoder structure Section 3.2 attributes to the backbone.
-# Placing the wide blocks at downsampled resolution is what makes ~7.87 M
-# parameters fit inside ~64 G FLOPs (see ../RECONCILIATION.md).
-#
-# MEASURED at 256x256 (run `python smoke_test.py` or `test.py --report-complexity`):
-#   params(total) = 8.093 M   (reported 7.87 M,  +2.8%)
-#   FLOPs (2xMAC) = 61.88 G    (reported 64.22 G, -3.6%)
-# Cross-scale weight sharing (the paper's headline SST mechanism) is PRESERVED.
+# LMS-TRD, the definitive configuration described in Sec. 3 (= ablation row M8).
+name: lms_trd
 
 model:
-  backbone: unet               # encoder-decoder shared SST backbone
-  native_dims: [32, 64, 128]   # per-scale stem widths (S1, S2, S3)         [Sec. 3.2]
-  base: 40                     # canonical base width of the shared U-Net
-  mult: [1, 2, 4, 8]           # per-level width multipliers -> [40,80,160,320]
-  blocks: [1, 2, 2, 3]         # SST blocks per enc/dec level (low res -> wide)
-  bott_blocks: 2               # SST blocks at the bottleneck (lowest resolution)
-  num_heads: 4
-  expansion: 4                 # DS-FFN expansion ratio r = 4               [Sec. 3.2]
-  low_rank_ratio: 2            # DW-MSA low-rank Q/K reduction
-  inr_table_log2: 14           # hash table size = 2^14 per level           [Sec. 3.3]
-
-  # --- co-designed mechanisms (toggle to reproduce ablation Table 5) ---
-  share_weights: true          # cross-scale weight sharing (SST)           [M6->M7]
-  use_inr: true                # Lite-INR hash-grid branch                  [M4->M5]
-  use_ebfu: true               # gated-additive eBFU fusion (else plain add)[M5->M6]
-  use_rrb: true                # Rain Refinement Block                      [M7->M8]
+  preset: M8                 # dim 32, blocks [2,2,2], heads [1,2,4], DS-FFN (r=4), DW-MSA,
+                             # Lite-INR, eBFU, cross-scale sharing, RRB (models/lms_trd.py)
 
 train:
-  epochs: 200                  # [Sec. 4.2]
-  batch_size: 16               # [Sec. 4.2]
-  patch_size: 256              # 256x256 random crops                       [Sec. 4.2]
-  lr: 2.0e-4                   # initial LR                                 [Sec. 4.2]
-  lr_step: 50                  # halve LR every 50 epochs                   [Sec. 4.2]
+  epochs: 200                # Sec. 4.2
+  batch_size: 16             # effective batch size
+  accum_steps: 1             # set >1 to reach batch_size with smaller GPU batches (batch_size / accum_steps per step)
+  patch_size: 256
+  lr: 2.0e-4                 # Adam(0.9, 0.999), halved every 50 epochs
+  lr_step: 50
   lr_gamma: 0.5
-  num_workers: 4
-  seed: 42                     # paper also reports seeds 123, 456          [Sec. 4.3]
-  ckpt_dir: checkpoints
-  log_interval: 50
+  seed: 42
+  num_workers: 8
+  grad_checkpointing: true   # memory only; results unchanged (see smoke_test.py)
+  amp: false                 # float32 training
+  log_interval: 100
 
-loss:                          # composite objective Eq. (5)-(8)            [Sec. 3.6]
-  lambda_edge: 0.05            # lambda1
-  lambda_freq: 0.01            # lambda2
-  lambda_inr: 0.1              # lambda3
-  char_eps: 1.0e-3             # Charbonnier eps (constant added = eps^2 = 1e-6)  [Eq. 6]
+loss:                        # Eq. (5)-(8); weights as in NeRD-Rain
+  lambda_edge: 0.05
+  lambda_freq: 0.01
+  lambda_inr: 0.1
+  char_eps: 1.0e-3
 
 data:
-  train_root: data/train       # expects {train_root}/rainy and {train_root}/clean
-  val_root: data/val
-  rainy_dir: rainy
-  clean_dir: clean
+  train_root: Datasets/train/Rain13K   # 13,712 pairs: input/ and target/
+  val_root: null                       # optional held-out folder; test sets are never used for model selection

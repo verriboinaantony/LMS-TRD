@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Run LMS-TRD on a single rainy image (or a folder of images).
+"""Derain one image or a folder of images.
 
-Example:
-    python inference.py --checkpoint checkpoints/lms_trd_best.pth \
-        --input rainy.png --output derained.png
+    python inference.py --checkpoint runs/lms_trd_s42/last.pth --input rainy.png --output derained.png
+    python inference.py --checkpoint runs/lms_trd_s42/last.pth --input rainy_dir/ --output out_dir/
 """
 
 import argparse
@@ -14,57 +13,39 @@ import numpy as np
 import torch
 from PIL import Image
 
-from models import build_model
-from utils import set_seed
-from utils.config import load_config
-
-_IMG_EXT = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
-
-
-def load_image(path: str) -> torch.Tensor:
-    arr = np.asarray(Image.open(path).convert("RGB"), dtype=np.float32) / 255.0
-    return torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
-
-
-def save_image(tensor: torch.Tensor, path: str):
-    arr = tensor.squeeze(0).clamp(0, 1).permute(1, 2, 0).cpu().numpy()
-    Image.fromarray((arr * 255.0 + 0.5).astype(np.uint8)).save(path)
+from datasets import load_rgb
+from datasets.derain_dataset import IMG_EXT
+from models import load_model
+from utils import pad_to_multiple
 
 
 @torch.no_grad()
+def derain(model, path, device):
+    x, (h, w) = pad_to_multiple(load_rgb(path)[None].to(device), 16)
+    out = model(x)[0][..., :h, :w].clamp(0, 1)
+    return (out[0].permute(1, 2, 0).cpu().numpy() * 255.0).round().astype(np.uint8)
+
+
 def main():
-    ap = argparse.ArgumentParser(description="LMS-TRD single-image inference")
-    ap.add_argument("--config", default="configs/lms_trd.yaml")
-    ap.add_argument("--checkpoint", required=True)
-    ap.add_argument("--input", required=True, help="image file or folder")
-    ap.add_argument("--output", required=True, help="output file or folder")
-    ap.add_argument("--device", default="cuda")
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--checkpoint', required=True)
+    ap.add_argument('--input', required=True)
+    ap.add_argument('--output', required=True)
+    ap.add_argument('--device', default='cuda')
     args = ap.parse_args()
-
-    cfg = load_config(args.config)
-    set_seed(cfg.get("train", {}).get("seed", 42))
-    device = args.device if torch.cuda.is_available() and args.device == "cuda" else "cpu"
-
-    model = build_model(cfg.get("model", {})).to(device)
-    ckpt = torch.load(args.checkpoint, map_location=device)
-    model.load_state_dict(ckpt["model"] if "model" in ckpt else ckpt)
-    model.eval()
-
-    in_path = Path(args.input)
-    if in_path.is_dir():
+    device = args.device if (args.device != 'cuda' or torch.cuda.is_available()) else 'cpu'
+    model = load_model(args.checkpoint, device)
+    src = Path(args.input)
+    if src.is_dir():
         os.makedirs(args.output, exist_ok=True)
-        files = [p for p in sorted(in_path.iterdir()) if p.suffix.lower() in _IMG_EXT]
-        for p in files:
-            x = load_image(str(p)).to(device)
-            out, _ = model(x)
-            save_image(out, os.path.join(args.output, p.name))
-            print(f"saved {os.path.join(args.output, p.name)}")
+        for p in sorted(src.iterdir()):
+            if p.suffix.lower() in IMG_EXT:
+                Image.fromarray(derain(model, p, device)).save(os.path.join(args.output, p.stem + '.png'))
+                print('saved', os.path.join(args.output, p.stem + '.png'))
     else:
-        x = load_image(str(in_path)).to(device)
-        out, _ = model(x)
-        save_image(out, args.output)
-        print(f"saved {args.output}")
+        Image.fromarray(derain(model, src, device)).save(args.output)
+        print('saved', args.output)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

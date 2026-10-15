@@ -1,6 +1,10 @@
-torch>=1.10
+torch>=2.1
 numpy>=1.21
-Pillow>=8.0
+Pillow>=9.0
 PyYAML>=5.4
-# optional: independent MAC/FLOP cross-check used by the profiler if present
-# thop>=0.1.1
+# optional
+ptflops>=0.7      # cross-check of complexity (conv/linear layers only)
+onnx>=1.15        # tools/export_onnx.py
+onnxscript>=0.1   # tools/export_onnx.py (torch.export-based exporter)
+onnxruntime>=1.17 # numerical check of the exported model
+einops            # only for tools/verify_nerd_rain.py (imports the official NeRD-Rain code)

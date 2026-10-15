@@ -1,0 +1,29 @@
+# Ablation row M3: + DS-FFN  (Sec. 4.5, Table 4). Trained exactly like LMS-TRD.
+name: ablation_M3
+
+model:
+  preset: M3
+
+train:
+  epochs: 200                # Sec. 4.2
+  batch_size: 16             # effective batch size
+  accum_steps: 1             # set >1 to reach batch_size with smaller GPU batches (batch_size / accum_steps per step)
+  patch_size: 256
+  lr: 2.0e-4                 # Adam(0.9, 0.999), halved every 50 epochs
+  lr_step: 50
+  lr_gamma: 0.5
+  seed: 42
+  num_workers: 8
+  grad_checkpointing: true   # memory only; results unchanged (see smoke_test.py)
+  amp: false                 # float32 training
+  log_interval: 100
+
+loss:                        # Eq. (5)-(8); weights as in NeRD-Rain
+  lambda_edge: 0.05
+  lambda_freq: 0.01
+  lambda_inr: 0.1
+  char_eps: 1.0e-3
+
+data:
+  train_root: Datasets/train/Rain13K   # 13,712 pairs: input/ and target/
+  val_root: null                       # optional held-out folder; test sets are never used for model selection

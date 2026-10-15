@@ -1,0 +1,144 @@
+{
+  "environment": {
+    "torch": "2.14.1+cu130",
+    "python": "3.13.16",
+    "counter": "torch.utils.flop_counter.FlopCounterMode (FLOPs = 2 x MACs)",
+    "input": [
+      1,
+      3,
+      256,
+      256
+    ]
+  },
+  "ablation": [
+    {
+      "id": "M0",
+      "config": "NeRD-Rain (baseline)",
+      "params": 22893146,
+      "macs": 156316107776,
+      "params_M": 22.893146,
+      "gmacs": 156.316107776,
+      "gflops": 312.632215552,
+      "ptflops_gmacs_conv_linear_only": 148.406
+    },
+    {
+      "id": "M1",
+      "config": "+ channel reduction 48->32",
+      "params": 10530314,
+      "macs": 79275677696,
+      "params_M": 10.530314,
+      "gmacs": 79.275677696,
+      "gflops": 158.551355392
+    },
+    {
+      "id": "M2",
+      "config": "+ depth pruning [2,2,2]",
+      "params": 8644346,
+      "macs": 69395025920,
+      "params_M": 8.644346,
+      "gmacs": 69.39502592,
+      "gflops": 138.79005184
+    },
+    {
+      "id": "M3",
+      "config": "+ DS-FFN",
+      "params": 8608970,
+      "macs": 68896096256,
+      "params_M": 8.60897,
+      "gmacs": 68.896096256,
+      "gflops": 137.792192512
+    },
+    {
+      "id": "M4",
+      "config": "+ DW-MSA linear attention",
+      "params": 8254802,
+      "macs": 64538574848,
+      "params_M": 8.254802,
+      "gmacs": 64.538574848,
+      "gflops": 129.077149696
+    },
+    {
+      "id": "M5",
+      "config": "+ Lite-INR (hash grid)",
+      "params": 7895638,
+      "macs": 47749562368,
+      "params_M": 7.895638,
+      "gmacs": 47.749562368,
+      "gflops": 95.499124736
+    },
+    {
+      "id": "M6",
+      "config": "+ eBFU (gated additive)",
+      "params": 6983626,
+      "macs": 44949078016,
+      "params_M": 6.983626,
+      "gmacs": 44.949078016,
+      "gflops": 89.898156032
+    },
+    {
+      "id": "M7",
+      "config": "+ cross-scale sharing (SST)",
+      "params": 3909642,
+      "macs": 44949078016,
+      "params_M": 3.909642,
+      "gmacs": 44.949078016,
+      "gflops": 89.898156032
+    },
+    {
+      "id": "M8",
+      "config": "+ RRB (LMS-TRD)",
+      "params": 3911757,
+      "macs": 45087490144,
+      "params_M": 3.911757,
+      "gmacs": 45.087490144,
+      "gflops": 90.174980288,
+      "ptflops_gmacs_conv_linear_only": 43.764
+    }
+  ],
+  "breakdown": {
+    "M0": {
+      "Transformer U-Net stages": {
+        "gmacs": 124.814656512,
+        "params_M": 18.634344
+      },
+      "Embeddings, context and output convs": {
+        "gmacs": 3.280601088,
+        "params_M": 0.069984
+      },
+      "INR branch (latent upsampling + INR)": {
+        "gmacs": 21.97815296,
+        "params_M": 2.155526
+      },
+      "Cross-scale fusion (BFPU / eBFU)": {
+        "gmacs": 6.242697216,
+        "params_M": 2.033292
+      },
+      "Rain Refinement Block": {
+        "gmacs": 0.0,
+        "params_M": 0.0
+      }
+    },
+    "M8": {
+      "Transformer U-Net stages": {
+        "gmacs": 42.213605376,
+        "params_M": 3.074624
+      },
+      "Embeddings, context and output convs": {
+        "gmacs": 1.507590144,
+        "params_M": 0.032832
+      },
+      "INR branch (latent upsampling + INR)": {
+        "gmacs": 1.2255232,
+        "params_M": 0.801034
+      },
+      "Cross-scale fusion (BFPU / eBFU)": {
+        "gmacs": 0.002359296,
+        "params_M": 0.001152
+      },
+      "Rain Refinement Block": {
+        "gmacs": 0.138412128,
+        "params_M": 0.002115
+      }
+    }
+  }
+}

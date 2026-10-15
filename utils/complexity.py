@@ -1,120 +1,113 @@
-"""Complexity measurement: exact parameter count and FLOP/MAC profiling
-(Section 4.4).
+"""Measured model complexity (Sec. 4.4).
 
-These functions report the MEASURED complexity of THIS implementation. They do
-not assume or hard-code any value from the paper -- the whole point is to let a
-reviewer (and the authors) compare the measured numbers against the reported
-7.87 M params / 64.22 G FLOPs.
+Convention used everywhere in the paper and in this repository
+--------------------------------------------------------------
+* Parameters: number of unique trainable tensors' elements (a weight shared by
+  several pyramid levels is counted once).
+* MACs: multiply-accumulate operations of all convolutions, linear layers and
+  matrix products (including the attention products), for ONE forward pass of
+  a 1 x 3 x 256 x 256 input. Measured with PyTorch's own operator-level counter
+  (torch.utils.flop_counter.FlopCounterMode), which reports FLOPs = 2 x MACs.
+  Element-wise operations (normalisation, activations, resizing, additions)
+  are not counted, as is standard.
+* FLOPs = 2 x MACs. Tables in the paper report GMACs; FLOPs are given in the
+  text where needed.
 
-UNITS / CONVENTION (read this before quoting a number)
-------------------------------------------------------
-Restoration papers are inconsistent about "FLOPs": some report multiply-add
-*counts* (MACs), others report 2 x MACs. To avoid ambiguity this profiler
-returns BOTH:
-    macs_G   : multiply-accumulate operations, in units of 1e9   (a.k.a. "GMacs")
-    flops_G  : 2 x macs_G                                          (the 2xMAC convention)
-The reported per-module table (paper Table 4) is closest in scale to the MAC
-count. Whichever convention the manuscript intends, state it explicitly when
-reporting; do not mix the two.
+A cross-check with ptflops (the profiler used by the official NeRD-Rain code,
+which counts convolution/linear layers only) is available in
+tools/profile_complexity.py.
 """
+
+from collections import OrderedDict
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
+from torch.utils.flop_counter import FlopCounterMode
 
 
-def count_parameters(model: nn.Module, trainable_only: bool = True) -> int:
-    params = (p for p in model.parameters() if (p.requires_grad or not trainable_only))
-    return sum(p.numel() for p in params)
+def count_parameters(model: nn.Module) -> int:
+    """Unique parameters (shared tensors counted once)."""
+    return sum(p.numel() for p in model.parameters())
 
 
-def count_shared_unique_parameters(model: nn.Module) -> int:
-    """Count unique parameter tensors (shared weights counted once)."""
+def module_parameters(model: nn.Module, prefix: str) -> int:
     seen, total = set(), 0
-    for p in model.parameters():
-        if id(p) in seen:
-            continue
-        seen.add(id(p))
-        total += p.numel()
+    for name, p in model.named_parameters():
+        if (name == prefix or name.startswith(prefix + '.')) and id(p) not in seen:
+            seen.add(id(p))
+            total += p.numel()
     return total
 
 
 @torch.no_grad()
-def estimate_macs(model: nn.Module, input_size=(1, 3, 256, 256),
-                  device: str = 'cpu') -> float:
-    """Multiply-accumulate ops for Conv1d/Conv2d/Linear via forward hooks.
-
-    Returns MACs for one forward pass at `input_size`. Attention is dominated by
-    its Conv2d projections, which are counted; the linear-attention einsum mixing
-    adds < 1 GMac at 256x256 (a negligible correction reported in the README).
-    """
-    macs = [0]
-    handles = []
-
-    def conv_hook(module, inp, out):
-        out_elems = out.numel()
-        k = 1
-        for ks in module.kernel_size:
-            k *= ks
-        in_per_group = module.in_channels // module.groups
-        macs[0] += out_elems * in_per_group * k
-
-    def linear_hook(module, inp, out):
-        macs[0] += out.numel() * module.in_features
-
-    for m in model.modules():
-        if isinstance(m, (nn.Conv1d, nn.Conv2d)):
-            handles.append(m.register_forward_hook(conv_hook))
-        elif isinstance(m, nn.Linear):
-            handles.append(m.register_forward_hook(linear_hook))
-
+def measure_flops(model: nn.Module, input_size=(1, 3, 256, 256), device: str = 'cpu',
+                  per_module: bool = False):
+    """Return total FLOPs (2 x MACs) and optionally per-module FLOPs."""
     was_training = model.training
     model.eval()
-    x = torch.randn(*input_size, device=device)
-    model(x)
+    x = torch.rand(*input_size, device=device)
+    counter = FlopCounterMode(display=False)
+    with counter:
+        model(x)
     if was_training:
         model.train()
-    for h in handles:
-        h.remove()
-    return float(macs[0])
+    total = counter.get_total_flops()
+    if not per_module:
+        return total, None
+    per = OrderedDict()
+    for name, ops in counter.get_flop_counts().items():
+        per[name] = sum(ops.values())
+    return total, per
 
 
-# Backwards-compatible alias (older scripts import estimate_flops; it returns MACs).
-def estimate_flops(model: nn.Module, input_size=(1, 3, 256, 256),
-                   device: str = 'cpu') -> float:
-    return estimate_macs(model, input_size=input_size, device=device)
+def group_flops(per_module: Dict[str, int], root: str, groups: Dict[str, tuple]) -> Dict[str, int]:
+    """Sum per-module FLOPs into named groups of top-level children of `root`.
 
-
-@torch.no_grad()
-def thop_macs(model: nn.Module, input_size=(1, 3, 256, 256),
-              device: str = 'cpu'):
-    """Independent MAC cross-check via thop, if installed. Returns MACs or None.
-
-    Runs on a deep copy so thop's bookkeeping buffers never touch the caller's
-    model (some thop versions attach total_ops/total_params that can break a
-    subsequent real forward pass).
+    groups: {'Backbone': ('stages', 'embed', ...), ...}
     """
-    try:
-        import copy
-        from thop import profile
-        probe = copy.deepcopy(model).to(device).eval()
-        x = torch.randn(*input_size, device=device)
-        macs, _ = profile(probe, inputs=(x,), verbose=False)
-        return float(macs)
-    except Exception:
-        return None
+    # Containers such as ModuleDict are never called themselves, so their FQN may
+    # be absent; count the top-most CALLED modules below each prefix, skipping
+    # modules whose parent is already counted (avoids double counting).
+    out = OrderedDict((g, 0) for g in groups)
+    for g, children in groups.items():
+        for ch in children:
+            prefix = f'{root}.{ch}'
+            for key, val in per_module.items():
+                if not (key == prefix or key.startswith(prefix + '.')):
+                    continue
+                parent, counted_above = key, False
+                while '.' in parent:
+                    parent = parent.rsplit('.', 1)[0]
+                    if parent in per_module and (parent == prefix or parent.startswith(prefix + '.')):
+                        counted_above = True
+                        break
+                if not counted_above:
+                    out[g] += val
+    return out
 
 
 def complexity_report(model: nn.Module, input_size=(1, 3, 256, 256),
                       device: str = 'cpu') -> dict:
-    total = count_parameters(model, trainable_only=False)
-    unique = count_shared_unique_parameters(model)
-    macs = estimate_macs(model, input_size=input_size, device=device)
-    tmacs = thop_macs(model, input_size=input_size, device=device)
+    flops, _ = measure_flops(model, input_size, device)
     return {
-        "params_total_M": total / 1e6,
-        "params_unique_M": unique / 1e6,
-        "macs_G": macs / 1e9,
-        "flops_G": 2.0 * macs / 1e9,           # 2 x MAC convention
-        "thop_macs_G": (tmacs / 1e9) if tmacs is not None else None,
-        "input_size": input_size,
+        'params_M': count_parameters(model) / 1e6,
+        'gmacs': flops / 2e9,
+        'gflops': flops / 1e9,
+        'input_size': tuple(input_size),
     }
+
+
+def ptflops_macs(model: nn.Module, input_res=(3, 256, 256)) -> Optional[float]:
+    """GMACs as reported by ptflops (conv/linear layers only), or None if unavailable."""
+    try:
+        from ptflops import get_model_complexity_info
+    except ImportError:
+        return None
+    import copy
+    probe = copy.deepcopy(model).eval()
+    with torch.no_grad():
+        macs, _ = get_model_complexity_info(probe, input_res, as_strings=False,
+                                            print_per_layer_stat=False, verbose=False,
+                                            backend='pytorch')
+    return macs / 1e9

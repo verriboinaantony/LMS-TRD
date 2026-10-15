@@ -1,49 +1,61 @@
-"""PSNR / SSIM metrics (Section 4.1).
+"""PSNR / SSIM following the evaluation protocol of the Rain13K benchmark
+(MPRNet, `evaluate_PSNR_SSIM.m`), which produced the baseline numbers in Table 2:
 
-PSNR and SSIM are computed on images in [0, 1]. SSIM uses an 11x11 Gaussian
-window (sigma=1.5) following Wang et al., matching the convention used by
-common deraining benchmarks.
+  1. the restored image is clipped to [0, 1] and quantised to 8 bits;
+  2. both images are converted to the Y channel of YCbCr (ITU-R BT.601, as
+     MATLAB's rgb2ycbcr on uint8 data: Y = 16 + (65.481 R + 128.553 G
+     + 24.966 B) / 255, rounded);
+  3. PSNR with peak 255; SSIM (Wang et al., 2004) with an 11x11 Gaussian window
+     (sigma 1.5), K1 = 0.01, K2 = 0.03, L = 255, averaged over the 'valid' region.
+
+For final paper numbers the official MATLAB script can also be run on the
+images written by test.py --save-dir; this module is a faithful port.
+RGB-space metrics are available with space='rgb' for monitoring only.
 """
 
 import torch
 import torch.nn.functional as F
 
 
-def psnr(pred: torch.Tensor, target: torch.Tensor, max_val: float = 1.0) -> torch.Tensor:
-    pred = pred.clamp(0, max_val)
-    target = target.clamp(0, max_val)
-    mse = F.mse_loss(pred, target, reduction='none').flatten(1).mean(1)
-    mse = mse.clamp(min=1e-12)
-    return (10.0 * torch.log10((max_val ** 2) / mse)).mean()
+def to_uint8(img: torch.Tensor) -> torch.Tensor:
+    """[0,1] float -> rounded 0..255 values (kept as float tensor)."""
+    return torch.round(img.clamp(0, 1) * 255.0)
 
 
-def _gaussian_window(window_size: int, sigma: float, channels: int,
-                     device, dtype) -> torch.Tensor:
-    coords = torch.arange(window_size, device=device, dtype=dtype) - window_size // 2
+def rgb_to_y(img255: torch.Tensor) -> torch.Tensor:
+    """(B,3,H,W) in 0..255 -> (B,1,H,W) Y channel, rounded like MATLAB uint8 rgb2ycbcr."""
+    r, g, b = img255[:, 0:1], img255[:, 1:2], img255[:, 2:3]
+    y = 16.0 + (65.481 * r + 128.553 * g + 24.966 * b) / 255.0
+    return torch.round(y).clamp(0, 255)
+
+
+def _gaussian_window(size=11, sigma=1.5, device=None, dtype=torch.float64):
+    coords = torch.arange(size, device=device, dtype=dtype) - size // 2
     g = torch.exp(-(coords ** 2) / (2 * sigma ** 2))
-    g = (g / g.sum()).unsqueeze(1)
-    window_2d = (g @ g.t()).unsqueeze(0).unsqueeze(0)
-    return window_2d.expand(channels, 1, window_size, window_size).contiguous()
+    g = g / g.sum()
+    return (g[:, None] * g[None, :])[None, None]
 
 
-def ssim(pred: torch.Tensor, target: torch.Tensor, max_val: float = 1.0,
-         window_size: int = 11, sigma: float = 1.5) -> torch.Tensor:
-    pred = pred.clamp(0, max_val)
-    target = target.clamp(0, max_val)
-    C = pred.shape[1]
-    window = _gaussian_window(window_size, sigma, C, pred.device, pred.dtype)
-    pad = window_size // 2
+def psnr(pred: torch.Tensor, target: torch.Tensor, space: str = 'y') -> torch.Tensor:
+    """Mean PSNR over the batch. pred/target: (B,3,H,W) in [0,1]."""
+    p, t = to_uint8(pred).double(), to_uint8(target).double()
+    if space == 'y':
+        p, t = rgb_to_y(p), rgb_to_y(t)
+    mse = ((p - t) ** 2).flatten(1).mean(1).clamp_min(1e-10)
+    return (10.0 * torch.log10(255.0 ** 2 / mse)).mean()
 
-    mu1 = F.conv2d(pred, window, padding=pad, groups=C)
-    mu2 = F.conv2d(target, window, padding=pad, groups=C)
-    mu1_sq, mu2_sq, mu1_mu2 = mu1 ** 2, mu2 ** 2, mu1 * mu2
 
-    sigma1_sq = F.conv2d(pred * pred, window, padding=pad, groups=C) - mu1_sq
-    sigma2_sq = F.conv2d(target * target, window, padding=pad, groups=C) - mu2_sq
-    sigma12 = F.conv2d(pred * target, window, padding=pad, groups=C) - mu1_mu2
-
-    c1 = (0.01 * max_val) ** 2
-    c2 = (0.03 * max_val) ** 2
-    ssim_map = ((2 * mu1_mu2 + c1) * (2 * sigma12 + c2)) / \
-               ((mu1_sq + mu2_sq + c1) * (sigma1_sq + sigma2_sq + c2))
-    return ssim_map.mean()
+def ssim(pred: torch.Tensor, target: torch.Tensor, space: str = 'y') -> torch.Tensor:
+    """Mean SSIM over the batch (valid-region averaging, as in ssim_index.m)."""
+    p, t = to_uint8(pred).double(), to_uint8(target).double()
+    if space == 'y':
+        p, t = rgb_to_y(p), rgb_to_y(t)
+    c = p.shape[1]
+    w = _gaussian_window(device=p.device).expand(c, 1, 11, 11)
+    mu1, mu2 = F.conv2d(p, w, groups=c), F.conv2d(t, w, groups=c)
+    s11 = F.conv2d(p * p, w, groups=c) - mu1 ** 2
+    s22 = F.conv2d(t * t, w, groups=c) - mu2 ** 2
+    s12 = F.conv2d(p * t, w, groups=c) - mu1 * mu2
+    c1, c2 = (0.01 * 255) ** 2, (0.03 * 255) ** 2
+    m = ((2 * mu1 * mu2 + c1) * (2 * s12 + c2)) / ((mu1 ** 2 + mu2 ** 2 + c1) * (s11 + s22 + c2))
+    return m.flatten(1).mean(1).mean()
